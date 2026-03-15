@@ -17,6 +17,13 @@ from playwright.sync_api import sync_playwright
 import akshare as ak
 from stock_predictor import predict_stock, load_news_data, plot_kline, get_daily_data  # 导入预测函数
 
+# 检测是否在 Streamlit Cloud 或 GitHub Actions 环境
+if os.getenv('STREAMLIT_RUNTIME') or os.getenv('GITHUB_ACTIONS'):
+    # 在云端只定义函数，不执行任何初始化
+    pass
+
+
+
 # ==================== 第一部分：初始化Tushare ====================
 ts.set_token('5594f3528180b170626430040a26acff46e86c5b8c98dc4b2f1094a5')
 pro = ts.pro_api()
@@ -156,8 +163,7 @@ def load_concept_map_from_akshare():
         print(f"加载概念映射失败: {e}，将使用股票名称模糊匹配进行概念筛选。")
         USE_PRECISE_CONCEPT = False
 
-# 立即尝试加载
-load_concept_map_from_akshare()
+
 
 # ==================== 全局可调参数 ====================
 NEWS_WEIGHT_FACTOR = 10      # 新闻提及权重系数（当前未使用）
@@ -878,6 +884,12 @@ def run_analysis_flow(force_refresh=False):
     else:
         print("未选出符合条件的股票。")
 
+    # 导出热度数据供网站使用（无论是否有推荐股票，只要热度存在就导出）
+    if not industry_heat.empty:
+        industry_heat.to_csv('industry_heat.csv', index=False, encoding='utf-8-sig')
+    if not concept_heat.empty:
+        concept_heat.to_csv('concept_heat.csv', index=False, encoding='utf-8-sig')
+
     return industry_heat, concept_heat, news_df, top_stocks
 
 def search_stock(keyword):
@@ -954,6 +966,17 @@ def update_filters():
 
     print(f"已更新行业关键词：{filter_industries}")
     print(f"已更新概念关键词：{filter_concepts}")
+
+import sys
+
+if len(sys.argv) > 1 and sys.argv[1] == '--auto':
+    # 自动运行模式
+    print("自动运行模式：执行一次完整分析...")
+    result = run_analysis_flow(force_refresh=False)
+    print("分析完成。")
+    sys.exit(0)
+if not (os.getenv('STREAMLIT_RUNTIME') or os.getenv('GITHUB_ACTIONS')):
+    load_concept_map_from_akshare()
 
 # ==================== 主程序（交互菜单）====================
 if __name__ == "__main__":
@@ -1044,11 +1067,3 @@ if __name__ == "__main__":
 
         else:
             print("无效输入，请重新选择。")
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] == '--auto':
-        # 自动运行模式
-        print("自动运行模式：执行一次完整分析...")
-        result = run_analysis_flow(force_refresh=False)
-        print("分析完成。")
-        sys.exit(0)
