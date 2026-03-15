@@ -4,6 +4,7 @@
 - 展示行业/概念热度排名（从预先计算的 CSV 读取）
 - 展示推荐股票列表
 - 股票搜索与预测（K线图、技术指标、新闻影响）
+- 自定义行业/概念推荐（输入关键词动态生成）
 - 数据由 GitHub Actions 自动更新
 """
 
@@ -18,6 +19,8 @@ warnings.filterwarnings('ignore')
 
 # 导入预测模块的函数
 from stock_predictor import get_stock_basic, get_daily_data, plot_kline, predict_stock, load_news_data
+# 导入选股模块的函数（用于自定义推荐）
+from stock_suggestion import rank_stocks, load_daily_basic, get_stock_fundamental, get_stock_technical
 
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="智能体选股预测系统", layout="wide")
@@ -63,7 +66,7 @@ if 'search_result' in st.session_state:
     st.session_state['selected_name'] = stock_name
 
 # ==================== 主区域：选项卡 ====================
-tab1, tab2, tab3 = st.tabs(["📈 行业/概念热度", "⭐ 推荐股票", "🔍 股票预测详情"])
+tab1, tab2, tab3, tab4 = st.tabs(["📈 行业/概念热度", "⭐ 推荐股票", "🔍 股票预测详情", "⚙️ 自定义推荐"])
 
 # ---------- 行业/概念热度 ----------
 with tab1:
@@ -132,3 +135,65 @@ with tab3:
                 st.dataframe(df.tail(20))
     else:
         st.info("请在侧边栏搜索股票或在推荐股票选项卡中选择股票。")
+
+# ---------- 自定义推荐 ----------
+with tab4:
+    st.subheader("自定义行业/概念推荐")
+    st.markdown("请输入您关注的行业和概念关键词（可多个，用空格或逗号分隔），点击按钮重新生成推荐。")
+
+    col_in1, col_in2 = st.columns(2)
+    with col_in1:
+        ind_input = st.text_input("行业关键词", help="例如：银行 证券 软件")
+    with col_in2:
+        con_input = st.text_input("概念关键词", help="例如：人工智能 5G 芯片")
+
+    if st.button("生成推荐", type="primary"):
+        # 解析关键词
+        industries = None
+        concepts = None
+        if ind_input:
+            import re
+            industries = [k.strip() for k in re.split(r'[ ,，]+', ind_input) if k.strip()]
+        if con_input:
+            import re
+            concepts = [k.strip() for k in re.split(r'[ ,，]+', con_input) if k.strip()]
+
+        # 检查热度文件是否存在
+        if not os.path.exists('industry_heat.csv') or not os.path.exists('concept_heat.csv'):
+            st.error("热度数据文件不存在，请等待 GitHub Actions 首次运行生成数据。")
+        else:
+            with st.spinner("正在计算推荐，请稍候..."):
+                try:
+                    # 读取热度数据
+                    industry_heat = pd.read_csv('industry_heat.csv')
+                    concept_heat = pd.read_csv('concept_heat.csv')
+
+                    # 调用 rank_stocks 生成推荐
+                    result = rank_stocks(industry_heat, concept_heat,
+                                         filter_industries=industries,
+                                         filter_concepts=concepts,
+                                         top_n=10)
+
+                    if not result.empty:
+                        st.success("推荐生成成功！")
+                        st.dataframe(result)
+                        # 保存到 session_state 供预测使用
+                        st.session_state['custom_result'] = result
+                    else:
+                        st.warning("没有找到符合条件的股票，请尝试放宽关键词。")
+                except Exception as e:
+                    st.error(f"生成推荐时出错：{e}")
+
+    # 如果之前有生成结果，可以提供一个按钮将选中的股票用于预测
+    if 'custom_result' in st.session_state and not st.session_state['custom_result'].empty:
+        st.markdown("---")
+        st.subheader("从推荐结果中选择股票进行预测")
+        options = st.session_state['custom_result'].apply(
+            lambda x: f"{x['股票名称']} ({x['股票代码']})", axis=1).tolist()
+        selected_custom = st.selectbox("选择股票", options, key="custom_select")
+        if st.button("预测选中股票", key="predict_custom"):
+            ts_code = selected_custom.split('(')[-1].strip(')')
+            name = selected_custom.split(' (')[0]
+            st.session_state['selected_code'] = ts_code
+            st.session_state['selected_name'] = name
+            st.success(f"已选择 {name}，请切换到“股票预测详情”选项卡查看。")
