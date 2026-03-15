@@ -1,0 +1,352 @@
+"""
+智能体股价预测模块 v1.5 (可导入版，优化K线图中文字体)
+功能：
+- 技术面分析（MA, MACD, RSI, KDJ 等指标 + K线形态识别）
+- 新闻事件影响评分（基于新闻情感和影响力）
+- 综合预测输出（涨跌概率、目标区间、操作建议）
+- K线图绘制（K线、均线、成交量，带图例和网格）
+依赖：tushare, pandas, numpy, mplfinance, matplotlib
+"""
+
+import tushare as ts
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import os
+import warnings
+import mplfinance as mpf
+import matplotlib.pyplot as plt
+
+# ==================== 全局设置：中文字体 ====================
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun', 'FangSong', 'KaiTi', 'Arial Unicode MS']
+plt.rcParams['axes.unicode_minus'] = False
+warnings.filterwarnings('ignore')
+
+# ==================== 第一部分：初始化Tushare ====================
+# 从环境变量读取 token，如果没有则使用默认（注意：公开仓库不要暴露默认 token）
+token = os.getenv('TUSHARE_TOKEN', '5594f3528180b170626430040a26acff46e86c5b8c98dc4b2f1094a5')
+ts.set_token(token)
+pro = ts.pro_api()
+
+# 缓存目录
+CACHE_DIR = './'
+NEWS_DATA_FILE = os.path.join(CACHE_DIR, 'news_data.csv')          # 新闻数据（包含AI分析结果）
+RECOMMENDED_STOCKS_FILE = os.path.join(CACHE_DIR, '推荐股票.csv')  # 第一部分推荐股票
+
+# ==================== 数据获取函数（可复用）====================
+def get_stock_basic():
+    """获取A股基础信息"""
+    return pro.stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,industry,market')
+
+def get_daily_data(ts_code, start_date=None, end_date=None):
+    """获取个股日线行情，用于技术分析"""
+    if end_date is None:
+        end_date = datetime.now().strftime('%Y%m%d')
+    if start_date is None:
+        start_date = (datetime.now() - timedelta(days=90)).strftime('%Y%m%d')
+    df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date,
+                   fields='trade_date,open,high,low,close,vol')
+    df = df.sort_values('trade_date')
+    df['trade_date'] = pd.to_datetime(df['trade_date'])
+    df.set_index('trade_date', inplace=True)
+    return df
+
+# ==================== 技术指标计算 ====================
+def calculate_technical_indicators(df):
+    if df.empty or len(df) < 20:
+        return None
+    df = df.copy()
+    df['MA5'] = df['close'].rolling(5).mean()
+    df['MA10'] = df['close'].rolling(10).mean()
+    df['MA20'] = df['close'].rolling(20).mean()
+    exp12 = df['close'].ewm(span=12, adjust=False).mean()
+    exp26 = df['close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = exp12 - exp26
+    df['MACD_signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    df['MACD_hist'] = df['MACD'] - df['MACD_signal']
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    low_9 = df['low'].rolling(9).min()
+    high_9 = df['high'].rolling(9).max()
+    df['RSV'] = 100 * (df['close'] - low_9) / (high_9 - low_9)
+    df['K'] = df['RSV'].ewm(com=2).mean()
+    df['D'] = df['K'].ewm(com=2).mean()
+    df['J'] = 3 * df['K'] - 2 * df['D']
+    latest = df.iloc[-1]
+    return {
+        'close': latest['close'],
+        'volume': latest['vol'],
+        'MA5': latest['MA5'],
+        'MA10': latest['MA10'],
+        'MA20': latest['MA20'],
+        'MACD': latest['MACD'],
+        'MACD_signal': latest['MACD_signal'],
+        'MACD_hist': latest['MACD_hist'],
+        'RSI': latest['RSI'],
+        'K': latest['K'],
+        'D': latest['D'],
+        'J': latest['J'],
+        'trend_short': '上升' if latest['MA5'] > latest['MA10'] else '下降',
+        'trend_medium': '上升' if latest['MA10'] > latest['MA20'] else '下降',
+        'volume_ratio': latest['vol'] / df['vol'].rolling(20).mean().iloc[-1] if len(df) >=20 else 1.0,
+    }
+
+def identify_candlestick_patterns(df):
+    if df.empty or len(df) < 2:
+        return []
+    df = df.copy()
+    patterns = []
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    body = abs(last['close'] - last['open'])
+    lower_shadow = last['open'] - last['low'] if last['close'] >= last['open'] else last['close'] - last['low']
+    upper_shadow = last['high'] - last['close'] if last['close'] >= last['open'] else last['high'] - last['open']
+    if lower_shadow > 2 * body and upper_shadow < 0.3 * body:
+        if last['close'] > last['open']:
+            patterns.append('锤子线(看涨)')
+        else:
+            patterns.append('上吊线(看跌)')
+    if body < (last['high'] - last['low']) * 0.1:
+        patterns.append('十字星')
+    if prev['close'] < prev['open'] and last['close'] > last['open']:
+        if last['open'] < prev['close'] and last['close'] > prev['open']:
+            patterns.append('看涨吞没')
+    if prev['close'] > prev['open'] and last['close'] < last['open']:
+        if last['open'] > prev['close'] and last['close'] < prev['open']:
+            patterns.append('看跌吞没')
+    return patterns
+
+# ==================== 新闻影响分析 ====================
+def load_news_data():
+    if not os.path.exists(NEWS_DATA_FILE):
+        print(f"警告：新闻数据文件 {NEWS_DATA_FILE} 不存在，将不考虑新闻影响。")
+        return pd.DataFrame()
+    df = pd.read_csv(NEWS_DATA_FILE)
+    for col in ['ai_industries', 'ai_concepts', 'ai_companies']:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: eval(x) if isinstance(x, str) and x.startswith('[') else [])
+    return df
+
+def get_news_impact_for_stock(ts_code, news_df):
+    stock_basic = get_stock_basic()
+    row = stock_basic[stock_basic['ts_code'] == ts_code]
+    if row.empty:
+        return 0.0
+    stock_name = row.iloc[0]['name']
+    related_news = news_df[news_df['ai_companies'].apply(lambda x: stock_name in x if isinstance(x, list) else False)]
+    if related_news.empty:
+        return 0.0
+    total_effect = 0.0
+    for _, row in related_news.iterrows():
+        sentiment = row.get('sentiment', 0.0)
+        impact = row.get('impact', 0)
+        total_effect += sentiment * impact
+    avg_effect = total_effect / len(related_news)
+    return avg_effect
+
+# ==================== K线图绘制 ====================
+def plot_kline(ts_code, df, stock_name='', save=True):
+    """绘制K线图、均线、成交量，可选择保存或返回figure"""
+    if df.empty or len(df) < 20:
+        print(f"数据不足，无法绘制{ts_code}的K线图")
+        return None
+    plot_df = df.rename(columns={
+        'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'vol': 'Volume'
+    })
+    mc = mpf.make_marketcolors(up='red', down='green', edge='inherit', wick='inherit', volume='inherit')
+    s = mpf.make_mpf_style(marketcolors=mc, gridstyle='--', gridcolor='lightgray', y_on_right=False)
+    mav = (5, 10, 20)
+    title = f"{stock_name} ({ts_code}) K线图"
+    if save:
+        filename = f"{ts_code}_kline.png"
+        mpf.plot(plot_df, type='candle', style=s, title=title, ylabel='价格',
+                 volume=True, mav=mav, savefig=filename, figsize=(12,8))
+        print(f"K线图已保存至 {filename}")
+        return filename
+    else:
+        fig, axes = mpf.plot(plot_df, type='candle', style=s, title=title, ylabel='价格',
+                              volume=True, mav=mav, returnfig=True, figsize=(12,8))
+        return fig
+
+# ==================== 综合预测 ====================
+def predict_stock(ts_code, news_df):
+    df = get_daily_data(ts_code)
+    if df.empty:
+        return {'股票代码': ts_code, 'error': '无日线数据'}
+    indicators = calculate_technical_indicators(df)
+    if indicators is None:
+        return {'股票代码': ts_code, 'error': '数据不足'}
+    patterns = identify_candlestick_patterns(df)
+    news_impact = get_news_impact_for_stock(ts_code, news_df)
+
+    score = 0.0
+    signals = []
+    if indicators['MA5'] > indicators['MA10']:
+        score += 2
+        signals.append('MA金叉')
+    else:
+        score -= 1
+        signals.append('MA死叉')
+    if indicators['MACD'] > indicators['MACD_signal']:
+        score += 2
+        signals.append('MACD金叉')
+    else:
+        score -= 1
+    if indicators['RSI'] < 30:
+        score += 3
+        signals.append('RSI超卖')
+    elif indicators['RSI'] > 70:
+        score -= 3
+        signals.append('RSI超买')
+    else:
+        score += 1
+    if indicators['J'] < 20:
+        score += 2
+        signals.append('KDJ超卖')
+    elif indicators['J'] > 80:
+        score -= 2
+        signals.append('KDJ超买')
+    if indicators['volume_ratio'] > 1.5:
+        score += 1
+        signals.append('放量')
+    if news_impact > 2:
+        score += 3
+        signals.append('重大利好')
+    elif news_impact > 0:
+        score += 1
+        signals.append('小幅利好')
+    elif news_impact < -2:
+        score -= 3
+        signals.append('重大利空')
+    elif news_impact < 0:
+        score -= 1
+        signals.append('小幅利空')
+    if '看涨吞没' in patterns or '锤子线(看涨)' in patterns:
+        score += 2
+        signals.append('看涨形态')
+    elif '看跌吞没' in patterns or '上吊线(看跌)' in patterns:
+        score -= 2
+        signals.append('看跌形态')
+
+    trend_signal = "震荡"
+    if score >= 5:
+        trend_signal = "强烈看涨"
+    elif score >= 2:
+        trend_signal = "看涨"
+    elif score <= -5:
+        trend_signal = "强烈看跌"
+    elif score <= -2:
+        trend_signal = "看跌"
+
+    current_price = indicators['close']
+    volatility = df['close'].pct_change().std() * np.sqrt(5)
+    if trend_signal in ['强烈看涨', '看涨']:
+        target_up = current_price * (1 + volatility * 2)
+        target_down = current_price * (1 - volatility * 0.5)
+    elif trend_signal in ['强烈看跌', '看跌']:
+        target_up = current_price * (1 + volatility * 0.5)
+        target_down = current_price * (1 - volatility * 2)
+    else:
+        target_up = current_price * (1 + volatility)
+        target_down = current_price * (1 - volatility)
+
+    stock_basic = get_stock_basic()
+    name_row = stock_basic[stock_basic['ts_code'] == ts_code]
+    stock_name = name_row['name'].values[0] if not name_row.empty else ts_code
+
+    return {
+        '股票代码': ts_code,
+        '股票名称': stock_name,
+        '当前价格': round(current_price, 2),
+        '预测趋势': trend_signal,
+        '综合得分': score,
+        '支撑位': round(target_down, 2),
+        '压力位': round(target_up, 2),
+        '技术信号': ', '.join(signals),
+        '新闻影响': round(news_impact, 2),
+        'K线形态': ', '.join(patterns) if patterns else '无'
+    }
+
+# ==================== 可调用的预测函数 ====================
+def save_dataframe_safely(df, base_filename, max_attempts=10):
+    """安全保存DataFrame到CSV，如果文件被占用则尝试新文件名"""
+    for i in range(max_attempts):
+        if i == 0:
+            filename = base_filename
+        else:
+            name, ext = os.path.splitext(base_filename)
+            filename = f"{name}_{i}{ext}"
+        try:
+            df.to_csv(filename, index=False, encoding='utf-8-sig')
+            print(f"结果已保存到 {filename}")
+            return filename
+        except PermissionError:
+            if i == max_attempts - 1:
+                print(f"无法保存文件，请关闭占用 {base_filename} 的程序后重试。")
+                return None
+            continue
+    return None
+
+def run_prediction(stock_list=None):
+    """
+    运行预测流程
+    :param stock_list: 指定要预测的股票列表，若为None则从推荐股票文件读取
+    """
+    print("=" * 50)
+    print("智能体股价预测模块 v1.5 (支持K线图，中文字体优化)")
+    print("=" * 50)
+
+    news_df = load_news_data()
+    print(f"已加载新闻数据 {len(news_df)} 条")
+
+    if stock_list is None:
+        if os.path.exists(RECOMMENDED_STOCKS_FILE):
+            rec_df = pd.read_csv(RECOMMENDED_STOCKS_FILE)
+            if '股票代码' in rec_df.columns:
+                stock_list = rec_df['股票代码'].tolist()
+                print(f"从 {RECOMMENDED_STOCKS_FILE} 加载 {len(stock_list)} 只推荐股票")
+            else:
+                stock_list = []
+        else:
+            stock_list = []
+    else:
+        print(f"将预测用户指定的 {len(stock_list)} 只股票")
+
+    if not stock_list:
+        print("未指定股票列表，请输入要预测的股票代码（多个用空格分隔）：")
+        user_input = input().strip()
+        if user_input:
+            stock_list = user_input.split()
+        else:
+            stock_list = ['000001.SZ', '600519.SH', '300750.SZ']
+
+    results = []
+    for ts_code in stock_list:
+        print(f"\n正在预测 {ts_code} ...")
+        # 获取日线数据用于绘图
+        df = get_daily_data(ts_code)
+        if not df.empty and len(df) >= 20:
+            # 获取股票名称
+            stock_basic = get_stock_basic()
+            name_row = stock_basic[stock_basic['ts_code'] == ts_code]
+            stock_name = name_row['name'].values[0] if not name_row.empty else ts_code
+            plot_kline(ts_code, df, stock_name)
+        result = predict_stock(ts_code, news_df)
+        results.append(result)
+
+    result_df = pd.DataFrame(results)
+    print("\n" + "=" * 50)
+    print("【股价预测结果】")
+    print("=" * 50)
+    print(result_df.to_string(index=False))
+
+    output_file = '股价预测.csv'
+    save_dataframe_safely(result_df, output_file)
+
+    return result_df
+
+if __name__ == "__main__":
+    run_prediction()

@@ -1,0 +1,10 @@
+streamlit
+tushare
+pandas
+numpy
+mplfinance
+matplotlib
+requests
+beautifulsoup4
+playwright
+akshare
