@@ -33,7 +33,7 @@ if os.path.exists('news_data.csv'):
 else:
     st.sidebar.warning("暂无数据，请等待 GitHub Actions 首次运行。")
 
-st.sidebar.markdown("🔁 [手动触发数据更新](https://github.com/你的用户名/你的仓库名/actions/workflows/update_data.yml)")
+st.sidebar.markdown("🔁 [手动触发数据更新](https://github.com/Y-Sharky/Sharkuant/github/workflows/update_data.yml)")
 st.sidebar.caption("点击链接前往 GitHub Actions 手动运行更新工作流（需登录 GitHub）。")
 st.sidebar.markdown("---")
 
