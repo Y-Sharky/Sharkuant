@@ -12,6 +12,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import sys
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import warnings
@@ -25,6 +26,14 @@ from stock_suggestion import rank_stocks, load_daily_basic, get_stock_fundamenta
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="智能体选股预测系统", layout="wide")
 st.title("📊 智能体选股预测系统")
+
+# ==================== 初始化会话状态 ====================
+if 'current_tab' not in st.session_state:
+    st.session_state.current_tab = 0  # 默认显示行业/概念热度
+if 'selected_code' not in st.session_state:
+    st.session_state.selected_code = None
+if 'selected_name' not in st.session_state:
+    st.session_state.selected_name = None
 
 # ==================== 侧边栏 ====================
 st.sidebar.header("控制面板")
@@ -60,76 +69,108 @@ if 'search_result' in st.session_state:
     result = st.session_state['search_result']
     options = result.apply(lambda x: f"{x['name']} ({x['ts_code']})", axis=1).tolist()
     selected = st.sidebar.selectbox("请选择股票", options)
-    ts_code = selected.split('(')[-1].strip(')')
-    stock_name = selected.split(' (')[0]
-    st.session_state['selected_code'] = ts_code
-    st.session_state['selected_name'] = stock_name
+    if selected:
+        ts_code = selected.split('(')[-1].strip(')')
+        stock_name = selected.split(' (')[0]
+        # 如果选择的是新股票，则保存并跳转到预测详情
+        if st.session_state.selected_code != ts_code:
+            st.session_state.selected_code = ts_code
+            st.session_state.selected_name = stock_name
+            st.session_state.current_tab = 2  # 切换到预测详情
+            st.rerun()
 
-# ==================== 主区域：选项卡 ====================
-tab1, tab2, tab3, tab4 = st.tabs(["📈 行业/概念热度", "⭐ 推荐股票", "🔍 股票预测详情", "⚙️ 自定义推荐"])
+# ==================== 自定义选项卡 ====================
+tab_options = ["📈 行业/概念热度", "⭐ 推荐股票", "🔍 股票预测详情", "⚙️ 自定义推荐"]
+cols = st.columns(len(tab_options))
+for i, option in enumerate(tab_options):
+    if cols[i].button(option, use_container_width=True):
+        st.session_state.current_tab = i
+        st.rerun()
 
+st.markdown("---")
+
+# ==================== 根据当前选项卡显示内容 ====================
 # ---------- 行业/概念热度 ----------
-with tab1:
+if st.session_state.current_tab == 0:
+    st.subheader("行业/概念热度排名")
     col1, col2 = st.columns(2)
     if os.path.exists('industry_heat.csv') and os.path.exists('concept_heat.csv'):
         industry_heat = pd.read_csv('industry_heat.csv')
         concept_heat = pd.read_csv('concept_heat.csv')
         with col1:
-            st.subheader("行业热度排名（前20）")
+            st.markdown("**行业热度排名（前20）**")
             st.dataframe(industry_heat.head(20))
         with col2:
-            st.subheader("概念热度排名（前20）")
+            st.markdown("**概念热度排名（前20）**")
             st.dataframe(concept_heat.head(20))
     else:
         st.info("暂无热度数据，请等待 GitHub Actions 首次运行。")
 
 # ---------- 推荐股票 ----------
-with tab2:
+elif st.session_state.current_tab == 1:
+    st.subheader("最新推荐股票")
     if os.path.exists('推荐股票.csv'):
         rec_df = pd.read_csv('推荐股票.csv')
-        st.subheader("最新推荐股票 Top 10")
+        st.markdown("**Top 10 推荐股票**")
         options = rec_df.apply(lambda x: f"{x['股票名称']} ({x['股票代码']})", axis=1).tolist()
         selected_rec = st.selectbox("选择股票进行预测", options)
-        if selected_rec:
+        if st.button("预测选中股票", key="predict_rec"):
             ts_code = selected_rec.split('(')[-1].strip(')')
             name = selected_rec.split(' (')[0]
-            st.session_state['selected_code'] = ts_code
-            st.session_state['selected_name'] = name
-            st.success(f"已选择 {name}，请切换到“股票预测详情”选项卡查看。")
+            st.session_state.selected_code = ts_code
+            st.session_state.selected_name = name
+            st.session_state.current_tab = 2
+            st.rerun()
         st.dataframe(rec_df)
     else:
         st.info("暂无推荐股票数据，请等待 GitHub Actions 首次运行。")
 
 # ---------- 股票预测详情 ----------
-with tab3:
-    if 'selected_code' in st.session_state:
-        ts_code = st.session_state['selected_code']
-        name = st.session_state['selected_name']
+elif st.session_state.current_tab == 2:
+    if st.session_state.selected_code is not None:
+        ts_code = st.session_state.selected_code
+        name = st.session_state.selected_name
+        st.subheader(f"{name} ({ts_code}) 预测详情")
+
         col1, col2 = st.columns([2, 1])
-        df = get_daily_data(ts_code)
+
+        # 获取日线数据
+        with st.spinner("正在获取数据..."):
+            try:
+                df = get_daily_data(ts_code)
+            except Exception as e:
+                st.error(f"获取数据失败：{e}")
+                df = None
+
         with col1:
-            st.subheader(f"{name} ({ts_code}) K线图")
             if df is not None and len(df) >= 20:
                 fig = plot_kline(ts_code, df, stock_name=name, save=False)
                 st.pyplot(fig)
+            elif df is not None and len(df) < 20:
+                st.warning(f"数据不足（仅 {len(df)} 条），至少需要20条数据才能绘制K线图。")
             else:
-                st.warning("数据不足，无法绘制K线图")
+                st.warning("无法获取日线数据，请检查股票代码或网络连接。")
+
         with col2:
-            st.subheader("预测结果")
+            st.markdown("**预测结果**")
             news_df = load_news_data()
             if df is not None and len(df) >= 20:
-                result = predict_stock(ts_code, news_df)
-                st.metric("当前价格", f"{result['当前价格']} 元")
-                st.metric("预测趋势", result['预测趋势'])
-                st.metric("综合得分", result['综合得分'])
-                st.metric("支撑位", f"{result['支撑位']} 元")
-                st.metric("压力位", f"{result['压力位']} 元")
-                with st.expander("详细信号"):
-                    st.write(f"**技术信号**: {result['技术信号']}")
-                    st.write(f"**新闻影响**: {result['新闻影响']}")
-                    st.write(f"**K线形态**: {result['K线形态']}")
+                try:
+                    result = predict_stock(ts_code, news_df)
+                    st.metric("当前价格", f"{result['当前价格']} 元")
+                    st.metric("预测趋势", result['预测趋势'])
+                    st.metric("综合得分", result['综合得分'])
+                    st.metric("支撑位", f"{result['支撑位']} 元")
+                    st.metric("压力位", f"{result['压力位']} 元")
+                    with st.expander("详细信号"):
+                        st.write(f"**技术信号**: {result['技术信号']}")
+                        st.write(f"**新闻影响**: {result['新闻影响']}")
+                        st.write(f"**K线形态**: {result['K线形态']}")
+                except Exception as e:
+                    st.error(f"预测失败：{e}")
             else:
                 st.info("暂无足够数据进行预测")
+
         if df is not None:
             with st.expander("查看历史数据"):
                 st.dataframe(df.tail(20))
@@ -137,7 +178,7 @@ with tab3:
         st.info("请在侧边栏搜索股票或在推荐股票选项卡中选择股票。")
 
 # ---------- 自定义推荐 ----------
-with tab4:
+elif st.session_state.current_tab == 3:
     st.subheader("自定义行业/概念推荐")
     st.markdown("请输入您关注的行业和概念关键词（可多个，用空格或逗号分隔），点击按钮重新生成推荐。")
 
@@ -194,6 +235,7 @@ with tab4:
         if st.button("预测选中股票", key="predict_custom"):
             ts_code = selected_custom.split('(')[-1].strip(')')
             name = selected_custom.split(' (')[0]
-            st.session_state['selected_code'] = ts_code
-            st.session_state['selected_name'] = name
-            st.success(f"已选择 {name}，请切换到“股票预测详情”选项卡查看。")
+            st.session_state.selected_code = ts_code
+            st.session_state.selected_name = name
+            st.session_state.current_tab = 2
+            st.rerun()
