@@ -40,8 +40,9 @@ st.sidebar.header("控制面板")
 
 # 显示数据更新时间（如果存在缓存文件）
 if os.path.exists('news_data.csv'):
-    mtime = datetime.fromtimestamp(os.path.getmtime('news_data.csv')).strftime('%Y-%m-%d %H:%M')
-    st.sidebar.info(f"📅 数据最后更新：{mtime}")
+    mtime_utc = datetime.fromtimestamp(os.path.getmtime('news_data.csv'))
+    mtime_local = mtime_utc + timedelta(hours=8)  # 转换为北京时间
+    st.sidebar.info(f"📅 数据最后更新：{mtime_local.strftime('%Y-%m-%d %H:%M')} (北京时间)")
 else:
     st.sidebar.warning("暂无数据，请等待 GitHub Actions 首次运行。")
 
