@@ -991,23 +991,28 @@ def update_filters():
 
 import sys
 
-# 在云端也尝试加载概念映射缓存（如果存在）
-if os.path.exists(CONCEPT_CACHE_FILE):
-    try:
-        with open(CONCEPT_CACHE_FILE, 'r', encoding='utf-8') as f:
-            cache_data = json.load(f)
-        CONCEPT_STOCK_MAP = {k: set(v) for k, v in cache_data.items()}
-        USE_PRECISE_CONCEPT = True
-        print("已从缓存文件加载概念映射")
-    except Exception as e:
-        print(f"读取概念缓存失败: {e}")
-
 if len(sys.argv) > 1 and sys.argv[1] == '--auto':
-    # 自动运行模式
+    # 自动模式下，先确保概念映射加载（如果缓存不存在则生成）
+    print("自动模式：检查概念映射缓存...")
+    if not os.path.exists(CONCEPT_CACHE_FILE):
+        print("概念映射缓存不存在，正在生成...")
+        load_concept_map_from_akshare()
+    else:
+        try:
+            with open(CONCEPT_CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+            CONCEPT_STOCK_MAP = {k: set(v) for k, v in cache_data.items()}
+            USE_PRECISE_CONCEPT = True
+            print(f"已从缓存文件加载 {len(CONCEPT_STOCK_MAP)} 个概念的成分股数据。")
+        except Exception as e:
+            print(f"读取概念缓存失败: {e}，重新生成...")
+            load_concept_map_from_akshare()
     print("自动运行模式：执行一次完整分析...")
     result = run_analysis_flow(force_refresh=False)
     print("分析完成。")
     sys.exit(0)
+
+# 本地环境加载概念映射
 if not (os.getenv('STREAMLIT_RUNTIME') or os.getenv('GITHUB_ACTIONS')):
     load_concept_map_from_akshare()
 
