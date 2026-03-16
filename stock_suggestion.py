@@ -21,16 +21,7 @@ from stock_predictor import predict_stock, load_news_data, plot_kline, get_daily
 if os.getenv('STREAMLIT_RUNTIME') or os.getenv('GITHUB_ACTIONS'):
     # 在云端只定义函数，不执行任何初始化
     pass
-# 在云端也尝试加载概念映射缓存（如果存在）
-if os.path.exists(CONCEPT_CACHE_FILE):
-    try:
-        with open(CONCEPT_CACHE_FILE, 'r', encoding='utf-8') as f:
-            cache_data = json.load(f)
-        CONCEPT_STOCK_MAP = {k: set(v) for k, v in cache_data.items()}
-        USE_PRECISE_CONCEPT = True
-        print("已从缓存文件加载概念映射")
-    except Exception as e:
-        print(f"读取概念缓存失败: {e}")
+
 
 
 # ==================== 第一部分：初始化Tushare ====================
@@ -977,6 +968,17 @@ def update_filters():
     print(f"已更新概念关键词：{filter_concepts}")
 
 import sys
+
+# 在云端也尝试加载概念映射缓存（如果存在）
+if os.path.exists(CONCEPT_CACHE_FILE):
+    try:
+        with open(CONCEPT_CACHE_FILE, 'r', encoding='utf-8') as f:
+            cache_data = json.load(f)
+        CONCEPT_STOCK_MAP = {k: set(v) for k, v in cache_data.items()}
+        USE_PRECISE_CONCEPT = True
+        print("已从缓存文件加载概念映射")
+    except Exception as e:
+        print(f"读取概念缓存失败: {e}")
 
 if len(sys.argv) > 1 and sys.argv[1] == '--auto':
     # 自动运行模式
