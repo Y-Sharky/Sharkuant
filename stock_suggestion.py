@@ -589,6 +589,15 @@ def rank_stocks(industry_heat, concept_heat, filter_industries=None, filter_conc
     hot_industries = set(industry_heat.head(5)['行业'].tolist()) if not industry_heat.empty else set()
     hot_concepts = set(concept_heat.head(5)['概念'].tolist()) if not concept_heat.empty else set()
 
+    # 概念关键词扩展映射（可根据需要扩充）
+    CONCEPT_EXPANSION = {
+        '人工智能': ['人工智能', 'AI', '智能', '软件服务', '计算机应用', '信息技术', '互联网', '大数据', '云计算'],
+        '5g': ['5G', '通信', '基站', '光通信'],
+        '芯片': ['芯片', '半导体', '集成电路', '元器件'],
+        '新能源': ['新能源', '光伏', '风电', '锂电池', '新能源汽车'],
+        # 可继续添加其他常用概念
+    }
+
     # 第一轮：快速筛选（行业 + 概念 + 基本面）
     candidates = []
     for _, row in stock_basic.iterrows():
@@ -609,7 +618,8 @@ def rank_stocks(industry_heat, concept_heat, filter_industries=None, filter_conc
         # 概念筛选（如果设置了）
         if filter_concepts:
             con_matched = False
-            # 尝试精确映射
+
+            # 优先使用精确映射
             if USE_PRECISE_CONCEPT:
                 for f_con in filter_concepts:
                     for concept_name, stock_set in CONCEPT_STOCK_MAP.items():
@@ -618,15 +628,25 @@ def rank_stocks(industry_heat, concept_heat, filter_industries=None, filter_conc
                             break
                     if con_matched:
                         break
-            # 如果精确映射未匹配，则尝试回退匹配（同时匹配股票名称和行业）
+
+            # 如果精确映射未匹配，则尝试扩展匹配
             if not con_matched:
+                # 收集所有需要匹配的关键词（原始词 + 扩展词）
+                match_keywords = []
+                for f_con in filter_concepts:
+                    # 加入原始词
+                    match_keywords.append(f_con.lower())
+                    # 如果有扩展映射，加入扩展词
+                    if f_con in CONCEPT_EXPANSION:
+                        match_keywords.extend([kw.lower() for kw in CONCEPT_EXPANSION[f_con]])
+
                 name_lower = name.lower()
                 industry_lower = industry.lower()
-                for f_con in filter_concepts:
-                    kw = f_con.lower()
+                for kw in match_keywords:
                     if kw in name_lower or kw in industry_lower:
                         con_matched = True
                         break
+
             if not con_matched:
                 continue
 
@@ -640,11 +660,11 @@ def rank_stocks(industry_heat, concept_heat, filter_industries=None, filter_conc
 
         quick_score = 0.0
         if pd.notna(pe) and pe > 0:
-            quick_score += max(0, 50 - pe) / 50 * 20
+            quick_score += max(0, 100 - pe) / 100 * 20   # 放宽PE上限至100
         if pd.notna(pb) and pb > 0:
-            quick_score += max(0, 10 - pb) / 10 * 10
+            quick_score += max(0, 20 - pb) / 20 * 10     # 放宽PB上限至20
         if pd.notna(turnover):
-            if turnover < 1:
+            if turnover < 0.5:                            # 放宽换手率下限至0.5%
                 quick_score += 0
             elif turnover > 10:
                 quick_score += 5
@@ -695,13 +715,13 @@ def rank_stocks(industry_heat, concept_heat, filter_industries=None, filter_conc
 
         final_score = 0.0
         if pd.notna(pe) and pe > 0:
-            final_score += max(0, 50 - pe) / 50 * 20
+            final_score += max(0, 100 - pe) / 100 * 20
         if pd.notna(pb) and pb > 0:
-            final_score += max(0, 10 - pb) / 10 * 10
+            final_score += max(0, 20 - pb) / 20 * 10
         if pd.notna(roe):
             final_score += min(roe, 30) / 30 * 15
         if pd.notna(turnover):
-            if turnover < 1:
+            if turnover < 0.5:
                 final_score += 0
             elif turnover > 10:
                 final_score += 5
