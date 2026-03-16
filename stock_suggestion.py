@@ -618,40 +618,24 @@ def rank_stocks(industry_heat, concept_heat, filter_industries=None, filter_conc
         # 概念筛选（如果设置了）
         if filter_concepts:
             con_matched = False
-            # 优先使用精确映射
+            # 尝试精确映射
             if USE_PRECISE_CONCEPT:
-                # 检查股票是否属于任何与关键词匹配的概念
                 for f_con in filter_concepts:
                     for concept_name, stock_set in CONCEPT_STOCK_MAP.items():
-                        # 概念名称模糊匹配（如输入“人工智能”可匹配“人工智能”概念）
                         if f_con.lower() in concept_name.lower() and ts_code in stock_set:
                             con_matched = True
                             break
                     if con_matched:
                         break
-                    # 概念筛选（如果设置了）
-                    if filter_concepts:
-                        con_matched = False
-                        # 优先使用精确映射
-                        if USE_PRECISE_CONCEPT:
-                            for f_con in filter_concepts:
-                                for concept_name, stock_set in CONCEPT_STOCK_MAP.items():
-                                    if f_con.lower() in concept_name.lower() and ts_code in stock_set:
-                                        con_matched = True
-                                        break
-                                if con_matched:
-                                    break
-                    else:
-                                # 改进的回退匹配：同时匹配股票名称和行业
-                        name_lower = name.lower()
-                        industry_lower = industry.lower()
-                        for f_con in filter_concepts:
-                            kw = f_con.lower()
-                            if kw in name_lower or kw in industry_lower:
-                                con_matched = True
-                                break
-                    if not con_matched:
-                        continue
+            # 如果精确映射未匹配，则尝试回退匹配（同时匹配股票名称和行业）
+            if not con_matched:
+                name_lower = name.lower()
+                industry_lower = industry.lower()
+                for f_con in filter_concepts:
+                    kw = f_con.lower()
+                    if kw in name_lower or kw in industry_lower:
+                        con_matched = True
+                        break
             if not con_matched:
                 continue
 
