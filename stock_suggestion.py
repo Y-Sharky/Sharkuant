@@ -503,34 +503,36 @@ def get_last_trade_date():
     return last.strftime('%Y%m%d')
 
 def load_daily_basic():
-    """加载每日基本面数据，优先从本地缓存读取"""
+    """加载每日基本面数据，优先从本地缓存读取，如果当天无数据则向前查找最近交易日"""
     cache_file = 'daily_basic_cache.csv'
-    last_trade = get_last_trade_date()
-    if os.path.exists(cache_file):
-        cached_df = pd.read_csv(cache_file)
-        if 'trade_date' in cached_df.columns and cached_df['trade_date'].iloc[0] == last_trade:
-            print(f"使用缓存数据，交易日: {last_trade}")
-            return cached_df.drop(columns=['trade_date'])
-    print(f"获取新的 daily_basic 数据，交易日: {last_trade}")
-    try:
-        df = pro.daily_basic(trade_date=last_trade, fields='ts_code,pe,pb,turnover_rate,volume_ratio')
-        if df is not None and not df.empty:
-            df['trade_date'] = last_trade
-            df.to_csv(cache_file, index=False, encoding='utf-8-sig')
-            return df.drop(columns=['trade_date'])
-        else:
-            yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
-            df = pro.daily_basic(trade_date=yesterday, fields='ts_code,pe,pb,turnover_rate,volume_ratio')
+    # 尝试获取最近5个交易日的数据
+    for days_back in range(5):
+        trade_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y%m%d')
+        # 如果存在缓存且日期匹配，直接使用
+        if os.path.exists(cache_file):
+            try:
+                cached_df = pd.read_csv(cache_file)
+                if 'trade_date' in cached_df.columns and cached_df['trade_date'].iloc[0] == trade_date:
+                    print(f"使用缓存数据，交易日: {trade_date}")
+                    return cached_df.drop(columns=['trade_date'])
+            except Exception:
+                pass  # 缓存文件损坏，忽略并重新获取
+        # 否则尝试获取新数据
+        print(f"尝试获取 {trade_date} 的 daily_basic 数据...")
+        try:
+            df = pro.daily_basic(trade_date=trade_date, fields='ts_code,pe,pb,turnover_rate,volume_ratio')
             if df is not None and not df.empty:
-                df['trade_date'] = yesterday
+                df['trade_date'] = trade_date
                 df.to_csv(cache_file, index=False, encoding='utf-8-sig')
+                print(f"成功获取 {trade_date} 数据")
                 return df.drop(columns=['trade_date'])
             else:
-                print("无法获取 daily_basic 数据")
-                return pd.DataFrame()
-    except Exception as e:
-        print(f"获取 daily_basic 失败: {e}")
-        return pd.DataFrame()
+                print(f"{trade_date} 无数据")
+        except Exception as e:
+            print(f"获取 {trade_date} 失败: {e}")
+            continue
+    print("无法获取 daily_basic 数据")
+    return pd.DataFrame()
 
 def get_stock_fundamental(ts_code):
     if ts_code in _FINA_INDICATOR_CACHE:

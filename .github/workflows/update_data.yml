@@ -31,6 +31,11 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add news_data.csv 推荐股票.csv industry_heat.csv concept_heat.csv concept_map_cache.json || true
+          # 只添加存在的文件
+          files_to_add="news_data.csv 推荐股票.csv industry_heat.csv concept_heat.csv"
+          if [ -f concept_map_cache.json ]; then
+            files_to_add="$files_to_add concept_map_cache.json"
+          fi
+          git add $files_to_add
           git diff --quiet && git diff --staged --quiet || git commit -m "Auto update data"
           git push
