@@ -8,6 +8,7 @@
 - 数据由 GitHub Actions 自动更新
 """
 
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -22,6 +23,17 @@ warnings.filterwarnings('ignore')
 from stock_predictor import get_stock_basic, get_daily_data, plot_kline, predict_stock, load_news_data
 # 导入选股模块的函数（用于自定义推荐）
 from stock_suggestion import rank_stocks, load_daily_basic, get_stock_fundamental, get_stock_technical
+# ==================== 缓存函数 ====================
+@st.cache_data(ttl=86400)  # 缓存24小时
+def get_cached_daily_data(ts_code):
+    """获取日线数据（缓存版）"""
+    return get_daily_data(ts_code)
+
+@st.cache_data(ttl=86400)
+def get_cached_prediction(ts_code):
+    """获取股票预测结果（缓存版，自动监视新闻文件变化）"""
+    news_df = load_news_data()
+    return predict_stock(ts_code, news_df)
 
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="智能体选股预测系统", layout="wide")
