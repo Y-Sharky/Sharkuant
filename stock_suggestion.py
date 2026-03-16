@@ -21,7 +21,16 @@ from stock_predictor import predict_stock, load_news_data, plot_kline, get_daily
 if os.getenv('STREAMLIT_RUNTIME') or os.getenv('GITHUB_ACTIONS'):
     # 在云端只定义函数，不执行任何初始化
     pass
-
+# 在云端也尝试加载概念映射缓存（如果存在）
+if os.path.exists(CONCEPT_CACHE_FILE):
+    try:
+        with open(CONCEPT_CACHE_FILE, 'r', encoding='utf-8') as f:
+            cache_data = json.load(f)
+        CONCEPT_STOCK_MAP = {k: set(v) for k, v in cache_data.items()}
+        USE_PRECISE_CONCEPT = True
+        print("已从缓存文件加载概念映射")
+    except Exception as e:
+        print(f"读取概念缓存失败: {e}")
 
 
 # ==================== 第一部分：初始化Tushare ====================
@@ -620,13 +629,29 @@ def rank_stocks(industry_heat, concept_heat, filter_industries=None, filter_conc
                             break
                     if con_matched:
                         break
-            else:
-                # 回退到股票名称模糊匹配
-                name_lower = name.lower()
-                for f_con in filter_concepts:
-                    if f_con.lower() in name_lower:
-                        con_matched = True
-                        break
+                    # 概念筛选（如果设置了）
+                    if filter_concepts:
+                        con_matched = False
+                        # 优先使用精确映射
+                        if USE_PRECISE_CONCEPT:
+                            for f_con in filter_concepts:
+                                for concept_name, stock_set in CONCEPT_STOCK_MAP.items():
+                                    if f_con.lower() in concept_name.lower() and ts_code in stock_set:
+                                        con_matched = True
+                                        break
+                                if con_matched:
+                                    break
+                    else:
+                                # 改进的回退匹配：同时匹配股票名称和行业
+                        name_lower = name.lower()
+                        industry_lower = industry.lower()
+                        for f_con in filter_concepts:
+                            kw = f_con.lower()
+                            if kw in name_lower or kw in industry_lower:
+                                con_matched = True
+                                break
+                    if not con_matched:
+                        continue
             if not con_matched:
                 continue
 
