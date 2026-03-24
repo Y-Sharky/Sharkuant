@@ -20,6 +20,12 @@ import torch
 from transformers import AutoTokenizer, AutoModel
 from train_news_model_utils_simple import MultiTaskFinBERT  # 请确保路径正确
 
+
+# 从 Hugging Face Hub 加载模型配置
+MODEL_NAME = "sharkuant/news-model-reg-v14"      # 替换为您的实际仓库名
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+GLOBAL_TYPE_CLASSES = None   # 用于存储类别映射
+
 # 检测是否在 Streamlit Cloud 或 GitHub Actions 环境
 if os.getenv('STREAMLIT_RUNTIME') or os.getenv('GITHUB_ACTIONS'):
     # 在云端只定义函数，不执行任何初始化
@@ -86,6 +92,35 @@ print(f"加载完成：行业 {len(INDUSTRY_LIST)} 个，概念 {len(CONCEPT_LIS
 CONCEPT_STOCK_MAP = {}          # 概念名称 -> set(股票代码)
 USE_PRECISE_CONCEPT = False     # 是否使用精确概念映射
 CONCEPT_CACHE_FILE = 'concept_map_cache.json'
+# ==================== 加载本地模型（从 Hugging Face Hub）====================
+# ==================== 加载本地模型（从 Hugging Face Hub）====================
+print("正在从 Hugging Face Hub 加载新闻分析模型...")
+try:
+    # 加载分词器
+    local_tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    # 加载预训练模型底座（必须与训练时一致）
+    base_model = AutoModel.from_pretrained('microsoft/deberta-v3-base')
+    # 从仓库中的 encoders.json 获取类别数
+    from huggingface_hub import hf_hub_download
+    encoders_path = hf_hub_download(repo_id=MODEL_NAME, filename='encoders.json')
+    with open(encoders_path, 'r', encoding='utf-8') as f:
+        encoders = json.load(f)
+    GLOBAL_TYPE_CLASSES = encoders['type_classes']          # 保存到全局变量
+    num_types = len(GLOBAL_TYPE_CLASSES)
+    # 实例化自定义模型
+    local_model = MultiTaskFinBERT(base_model, num_types)
+    # 下载并加载模型权重
+    model_file = hf_hub_download(repo_id=MODEL_NAME, filename='best_model.pt')
+    checkpoint = torch.load(model_file, map_location=device)
+    local_model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    local_model.to(device)
+    local_model.eval()
+    print("本地模型加载成功")
+except Exception as e:
+    print(f"本地模型加载失败：{e}，将回退到云端API")
+    local_model = None
+    local_tokenizer = None
+    GLOBAL_TYPE_CLASSES = None
 
 def load_concept_map_from_akshare():
     """尝试从 AkShare 获取概念板块成分股，构建概念-股票映射，并使用本地缓存"""
@@ -178,39 +213,7 @@ HALF_LIFE_DAYS = 7           # 时间衰减半衰期（天）
 AI_API_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
 AI_API_KEY = "sk-e0caf789280d422faa9cd1758496e8ec"  # 请替换为您的有效API Key
 AI_MODEL = "qwen-turbo"
-# 本地模型配置
-MODEL_DIR = 'models/news_model_reg_v14'          # 模型文件夹路径
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-local_model = None
-local_tokenizer = None
 
-def load_local_model():
-    global local_model, local_tokenizer
-    try:
-        print("正在加载本地新闻分析模型...")
-        # 加载分词器
-        local_tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
-        # 加载预训练模型底座
-        base_model = AutoModel.from_pretrained('microsoft/deberta-v3-base')
-        # 从训练代码中获取类别数量（需要读取 encoders.json）
-        with open(os.path.join(MODEL_DIR, 'encoders.json'), 'r', encoding='utf-8') as f:
-            encoders = json.load(f)
-        num_types = len(encoders['type_classes'])
-        # 实例化模型（回归版本，无 impact_classes）
-        local_model = MultiTaskFinBERT(base_model, num_types)
-        # 加载模型权重
-        checkpoint = torch.load(os.path.join(MODEL_DIR, 'best_model.pt'), map_location=device)
-        local_model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        local_model.to(device)
-        local_model.eval()
-        print("本地模型加载成功")
-        return True
-    except Exception as e:
-        print(f"加载本地模型失败：{e}，将使用云端API")
-        return False
-
-# 在程序启动时调用一次
-model_loaded = load_local_model()
 # ==================== 第二部分：新闻数据获取 ====================
 
 def crawl_eastmoney_with_playwright(page_num_limit=10, existing_titles=None):
@@ -408,11 +411,10 @@ def time_decay_weight(pub_time, half_life_days=HALF_LIFE_DAYS):
 # ==================== AI智能体分析 ====================
 def analyze_news_with_ai(title, content=''):
     """调用AI智能体分析新闻，优先使用本地模型，失败时回退到阿里云API"""
-    # 全局变量（在函数内可直接使用，但为清晰列出）
-    global local_model, local_tokenizer, MODEL_DIR, device, AI_API_URL, AI_API_KEY, AI_MODEL, INDUSTRY_LIST, CONCEPT_LIST
+    global local_model, local_tokenizer, device, AI_API_URL, AI_API_KEY, AI_MODEL, INDUSTRY_LIST, CONCEPT_LIST, GLOBAL_TYPE_CLASSES
 
     # 如果本地模型可用，使用本地预测
-    if local_model is not None and local_tokenizer is not None:
+    if local_model is not None and local_tokenizer is not None and GLOBAL_TYPE_CLASSES is not None:
         try:
             # 构建输入文本（与训练时一致：标题 + [SEP] + 正文）
             text = title
@@ -436,23 +438,17 @@ def analyze_news_with_ai(title, content=''):
             # 获取预测结果
             type_logits = outputs['type_logits']
             type_idx = torch.argmax(type_logits, dim=-1).cpu().item()
-            # 读取类别映射（从 encoders.json 加载）
-            encoders_path = os.path.join(MODEL_DIR, 'encoders.json')
-            with open(encoders_path, 'r', encoding='utf-8') as f:
-                encoders = json.load(f)
-            type_classes = encoders['type_classes']
-            news_type = type_classes[type_idx]
+            news_type = GLOBAL_TYPE_CLASSES[type_idx]
 
             sentiment = outputs['sentiment'].cpu().item()   # -1~1
             impact = outputs['impact'].cpu().item()         # 0~10
 
-            # 模型未输出 industries, concepts, companies，设为空列表
             result = {
                 'news_type': news_type,
                 'sentiment': round(sentiment, 4),
                 'industries': [],
                 'concepts': [],
-                'impact': int(round(impact)),   # 转为整数
+                'impact': int(round(impact)),
                 'companies': []
             }
             return result
