@@ -17,6 +17,7 @@ import warnings
 import mplfinance as mpf
 import matplotlib.pyplot as plt
 
+
 # ==================== 全局设置：中文字体 ====================
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun', 'FangSong', 'KaiTi', 'Arial Unicode MS']
 plt.rcParams['axes.unicode_minus'] = False
