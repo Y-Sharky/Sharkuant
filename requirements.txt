@@ -1,6 +1,6 @@
 torch
 transformers
-tushare
+tushare==1.4.21
 akshare
 pandas
 numpy
