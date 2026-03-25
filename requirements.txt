@@ -1,8 +1,8 @@
 torch
 transformers
-tushare
+tushare==1.4.26 --no-binary tushare
 akshare
-pandas
+pandas==2.2.0
 numpy
 requests
 beautifulsoup4
