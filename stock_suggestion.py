@@ -92,35 +92,73 @@ print(f"加载完成：行业 {len(INDUSTRY_LIST)} 个，概念 {len(CONCEPT_LIS
 CONCEPT_STOCK_MAP = {}          # 概念名称 -> set(股票代码)
 USE_PRECISE_CONCEPT = False     # 是否使用精确概念映射
 CONCEPT_CACHE_FILE = 'concept_map_cache.json'
-# ==================== 加载本地模型（从 Hugging Face Hub）====================
-# ==================== 加载本地模型（从 Hugging Face Hub）====================
-print("正在从 Hugging Face Hub 加载新闻分析模型...")
-try:
-    # 加载分词器
-    local_tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    # 加载预训练模型底座（必须与训练时一致）
-    base_model = AutoModel.from_pretrained('microsoft/deberta-v3-base')
-    # 从仓库中的 encoders.json 获取类别数
-    from huggingface_hub import hf_hub_download
-    encoders_path = hf_hub_download(repo_id=MODEL_NAME, filename='encoders.json')
-    with open(encoders_path, 'r', encoding='utf-8') as f:
-        encoders = json.load(f)
-    GLOBAL_TYPE_CLASSES = encoders['type_classes']          # 保存到全局变量
-    num_types = len(GLOBAL_TYPE_CLASSES)
-    # 实例化自定义模型
-    local_model = MultiTaskFinBERT(base_model, num_types)
-    # 下载并加载模型权重
-    model_file = hf_hub_download(repo_id=MODEL_NAME, filename='best_model.pt')
-    checkpoint = torch.load(model_file, map_location=device)
-    local_model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-    local_model.to(device)
-    local_model.eval()
-    print("本地模型加载成功")
-except Exception as e:
-    print(f"本地模型加载失败：{e}，将回退到云端API")
-    local_model = None
-    local_tokenizer = None
-    GLOBAL_TYPE_CLASSES = None
+
+# ==================== 本地模型路径 ====================
+LOCAL_MODEL_DIR = 'models/news_model_reg_v14'   # 相对路径，相对于项目根目录
+# ==================== 加载本地模型（优先本地，再尝试 Hub）====================
+print("正在加载新闻分析模型...")
+local_model = None
+local_tokenizer = None
+GLOBAL_TYPE_CLASSES = None
+
+# 1. 尝试从本地加载
+if os.path.exists(LOCAL_MODEL_DIR) and os.path.exists(os.path.join(LOCAL_MODEL_DIR, 'best_model.pt')):
+    try:
+        print("✓ 发现本地模型，正在加载...")
+        local_tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_DIR)
+        base_model = AutoModel.from_pretrained('microsoft/deberta-v3-base')
+        with open(os.path.join(LOCAL_MODEL_DIR, 'encoders.json'), 'r', encoding='utf-8') as f:
+            encoders = json.load(f)
+        GLOBAL_TYPE_CLASSES = encoders['type_classes']
+        num_types = len(GLOBAL_TYPE_CLASSES)
+        local_model = MultiTaskFinBERT(base_model, num_types)
+        checkpoint = torch.load(os.path.join(LOCAL_MODEL_DIR, 'best_model.pt'), map_location=device)
+        local_model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        local_model.to(device)
+        local_model = local_model.float()
+        local_model.eval()
+        print("✅ 本地模型加载成功")
+    except Exception as e:
+        print(f"⚠️ 本地模型加载失败: {e}")
+        local_model = None
+        local_tokenizer = None
+        GLOBAL_TYPE_CLASSES = None
+
+# 2. 如果本地加载失败，尝试从 Hugging Face Hub 下载
+if local_model is None:
+    print("正在尝试从 Hugging Face Hub 下载模型...")
+    print("   (若网络不稳定，请将模型文件手动放入 models/news_model_reg_v14 文件夹)")
+    try:
+        from huggingface_hub import hf_hub_download
+        local_tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+        base_model = AutoModel.from_pretrained('microsoft/deberta-v3-base')
+        encoders_path = hf_hub_download(repo_id=MODEL_NAME, filename='encoders.json')
+        with open(encoders_path, 'r', encoding='utf-8') as f:
+            encoders = json.load(f)
+        GLOBAL_TYPE_CLASSES = encoders['type_classes']
+        num_types = len(GLOBAL_TYPE_CLASSES)
+        local_model = MultiTaskFinBERT(base_model, num_types)
+        model_file = hf_hub_download(repo_id=MODEL_NAME, filename='best_model.pt')
+        checkpoint = torch.load(model_file, map_location=device)
+        local_model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        local_model.to(device)
+        local_model = local_model.float()
+        local_model.eval()
+        print("✅ 从 Hugging Face Hub 加载模型成功")
+    except Exception as e:
+        print(f"❌ Hugging Face Hub 加载失败: {e}")
+        print("   → 请手动下载模型并放置到 models/news_model_reg_v14 文件夹")
+        print("     下载地址: https://huggingface.co/sharkuant/news-model-reg-v14/tree/main")
+        print("     需要文件: best_model.pt, encoders.json, tokenizer.json, tokenizer_config.json")
+        local_model = None
+        local_tokenizer = None
+        GLOBAL_TYPE_CLASSES = None
+
+# 3. 最终备选：使用云端 API（由 analyze_news_with_ai 自动处理）
+if local_model is None:
+    print("⚠️ 将使用阿里云云端 API 进行分析（可能较慢且消耗 API 额度）")
+else:
+    print("✅ 本地模型已就绪，将使用本地模型进行高效分析")
 
 def load_concept_map_from_akshare():
     """尝试从 AkShare 获取概念板块成分股，构建概念-股票映射，并使用本地缓存"""
