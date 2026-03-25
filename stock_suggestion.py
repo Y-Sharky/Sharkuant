@@ -732,7 +732,8 @@ def rank_stocks(industry_heat, concept_heat, filter_industries=None, filter_conc
     for _, row in stock_basic.iterrows():
         ts_code = row['ts_code']
         name = row['name']
-        industry = row['industry']
+        industry = row['industry'] if pd.notna(row['industry']) else ''
+
 
         # 行业筛选（如果设置了）
         if filter_industries:
